@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import Player from '../objects/Player.js';
 import Zombie from '../objects/Zombie.js';
 import Bullet from '../objects/Bullet.js';
+import GameAudio from '../audio/GameAudio.js';
 import {
   ENEMY_TYPES, FIRE_RATE, GAME_HEIGHT, GAME_WIDTH, GROUND_Y,
   MAX_BULLETS, MAX_ZOMBIES, PLAYER_INVULNERABLE_MS, PLAYER_LIVES,
@@ -36,6 +37,7 @@ export default class GameScene extends Phaser.Scene {
     this.gameIsOver = false;
     this.isMuted = false;
     this.touchInput = { left: false, right: false, jump: false, aim: false, fire: false };
+    this.gameAudio = new GameAudio(this);
 
     this.player = new Player(this, GAME_WIDTH / 2);
     this.bullets = this.physics.add.group({ classType: Bullet, maxSize: MAX_BULLETS, runChildUpdate: true });
@@ -52,6 +54,9 @@ export default class GameScene extends Phaser.Scene {
     this.createHud();
     this.createTouchControls();
     this.spawnZombie('walker');
+    // Browsers require a click/tap/key press before Web Audio may begin.
+    this.input.once('pointerdown', this.startAudio, this);
+    this.input.keyboard.once('keydown', this.startAudio, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanUp, this);
   }
 
@@ -151,7 +156,7 @@ export default class GameScene extends Phaser.Scene {
     this.player.setAim(aiming);
     if (Phaser.Input.Keyboard.JustDown(this.keys.jump) || Phaser.Input.Keyboard.JustDown(this.keys.jumpAlt)
       || Phaser.Input.Keyboard.JustDown(this.keys.cursorJump) || this.touchInput.jump) {
-      if (this.player.jump()) this.playTone(210, 0.05, 0.025);
+      if (this.player.jump()) this.gameAudio.playJumpSound();
       this.touchInput.jump = false;
     }
 
@@ -209,7 +214,7 @@ export default class GameScene extends Phaser.Scene {
     this.cameras.main.shake(35, 0.0013);
     const flash = this.add.circle(muzzle.x, muzzle.y, 12, 0xffe786, 0.95).setDepth(10);
     this.tweens.add({ targets: flash, alpha: 0, scale: 2.4, duration: 70, onComplete: () => flash.destroy() });
-    this.playTone(145, 0.035, 0.04, 'square');
+    this.gameAudio.playGunSound();
   }
 
   handleBulletHit(bullet, zombie) {
@@ -217,7 +222,7 @@ export default class GameScene extends Phaser.Scene {
     bullet.deactivate();
     this.hits += 1;
     if (!zombie.takeHit()) {
-      this.playTone(85, 0.045, 0.025);
+      this.gameAudio.playZombieHitSound();
       return;
     }
 
@@ -228,7 +233,7 @@ export default class GameScene extends Phaser.Scene {
     this.comboClock = 2.8;
     this.createKillEffect(zombie.x, zombie.y - 48, `+${reward}`);
     zombie.deactivate();
-    this.playTone(62, 0.09, 0.045, 'sawtooth');
+    this.gameAudio.playZombieDeathSound();
   }
 
   createKillEffect(x, y, label) {
@@ -260,7 +265,7 @@ export default class GameScene extends Phaser.Scene {
       targets: this.player, alpha: 0.25, duration: 95, yoyo: true, repeat: 5,
       onComplete: () => { if (this.player.active) this.player.setAlpha(1).clearTint(); },
     });
-    this.playTone(48, 0.18, 0.07, 'sawtooth');
+    this.gameAudio.playPlayerDamageSound();
     this.updateHud();
     if (this.lives <= 0) this.endGame();
   }
@@ -296,22 +301,13 @@ export default class GameScene extends Phaser.Scene {
   toggleMute() {
     this.isMuted = !this.isMuted;
     this.sound.mute = this.isMuted;
+    this.gameAudio.setMuted(this.isMuted);
+    if (!this.isMuted) this.gameAudio.startAmbienceLoop();
     this.muteButton.setStrokeStyle(2, this.isMuted ? 0xff5353 : 0xffffff, 0.65);
   }
 
-  playTone(frequency, duration, volume, type = 'sine') {
-    if (this.isMuted || !this.sound.context) return;
-    const context = this.sound.context;
-    if (context.state === 'suspended') context.resume();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(frequency, context.currentTime);
-    gain.gain.setValueAtTime(volume, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
-    oscillator.connect(gain).connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + duration);
+  async startAudio() {
+    if (await this.gameAudio.unlock()) this.gameAudio.startAmbienceLoop();
   }
 
   endGame() {
@@ -337,5 +333,6 @@ export default class GameScene extends Phaser.Scene {
 
   cleanUp() {
     this.input.off('pointerup', this.releaseTouchInputs, this);
+    this.gameAudio.destroy();
   }
 }
